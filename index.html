@@ -9,6 +9,13 @@
 <link rel="preload" as="video" href="clue.mp4" />
 <link rel="preload" as="image" href="flashcard.png" />
 
+<script>
+  const qp = new URL(location.href).searchParams;
+  const forceLite = qp.get('mode') === 'lite';
+  const supportsGlass = CSS.supports('backdrop-filter','blur(2px)');
+  if (forceLite || !supportsGlass) document.documentElement.classList.add('no-glass');
+</script>
+
 <style>
   :root{
     --text-light:#fff; --text-dark:#111;
@@ -25,14 +32,13 @@
     position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;filter:brightness(.9) contrast(1.02);
   }
 
-  /* Subtle iTunes-artwork tint (hidden in non-music modes) */
+  /* Subtle artwork tint (hidden in non-music modes) */
   .artBGsimple{
     position:fixed;inset:0;z-index:1;pointer-events:none;opacity:var(--art-opacity);
     background-position:center;background-size:cover;background-repeat:no-repeat;
     transition:opacity 300ms ease;
   }
 
-  /* Scrim & stage (UI layer shown only in Music mode) */
   .scrim{
     position:fixed;inset:0;z-index:2;pointer-events:none;
     background:radial-gradient(ellipse at center,rgba(0,0,0,.12) 0%,rgba(0,0,0,.55) 70%);
@@ -45,7 +51,6 @@
     transition:opacity 300ms ease;
   }
 
-  /* Logo */
   .logoWrap{
     display:grid;place-items:center;margin-top:min(2vmin,12px);
     height:36vmin;width:36vmin;max-width:320px;max-height:320px;min-width:144px;min-height:144px;overflow:visible;
@@ -113,11 +118,11 @@
   .stealthHotspot{
     position:fixed;left:2.2vmin;bottom:2.2vmin;z-index:5;width:9vmin;height:9vmin;min-width:40px;min-height:40px;
     background:transparent;border:none;outline:none;border-radius:999px;
-    opacity:0; /* keep invisible to guests */
+    opacity:0; /* invisible to guests */
   }
   .stealthHotspot:focus{outline:2px dashed rgba(255,255,255,.25);outline-offset:4px}
 
-  /* FLASHCARD overlay (only in Card mode) */
+  /* FLASHCARD overlay (Card mode) */
   .flashcard{
     position:fixed;inset:0;z-index:3;display:grid;place-items:center;pointer-events:none;
     opacity:0;transition:opacity 300ms ease;
@@ -127,11 +132,7 @@
     filter:drop-shadow(0 30px 80px rgba(0,0,0,.6));
   }
 
-  /* MODE STATES
-     - mode-music: full UI
-     - mode-card : bg.mp4 + centered flashcard
-     - mode-clue : clue.mp4 only
-  */
+  /* MODE STATES */
   body.mode-music { --art-opacity: .28; }
   body.mode-card  { --art-opacity: 0; }
   body.mode-clue  { --art-opacity: 0; }
@@ -144,7 +145,6 @@
   body.mode-clue .scrim{
     opacity:0; pointer-events:none;
   }
-
   body.mode-card .flashcard{ opacity:1; }
 
   /* No-glass fallback */
@@ -206,13 +206,7 @@
   <button id="stealthToggle" class="stealthHotspot" title="Next screen" tabindex="0" aria-label="Next screen"></button>
 
   <script type="module">
-    /* -------- Feature flags / fallbacks -------- */
-    const qp = new URL(location.href).searchParams;
-    const forceLite = qp.get('mode') === 'lite';
-    const supportsGlass = CSS.supports('backdrop-filter','blur(2px)');
-    if (forceLite || !supportsGlass) document.documentElement.classList.add('no-glass');
-
-    /* -------- Firebase (track info) -------- */
+    /* -------- Firebase (RESTORED: your config + channel path) -------- */
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
     import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
 
@@ -222,11 +216,15 @@
       databaseURL: "https://music-display-1d354-default-rtdb.firebaseio.com",
       projectId: "music-display-1d354",
       storageBucket: "music-display-1d354.appspot.com",
-      messagingSenderId: "555717940924",
-      appId: "1:555717940924:web:7d5f9d3c8f7d6f9f8b3d2f"
+      messagingSenderId: "441980322694",
+      appId: "1:441980322694:web:32cfbcc182773b5bc1a207",
+      measurementId: "G-M0J8PEZLJR"
     };
+
+    const channelId = "nowplaying-6f3a2b97";                // ← your existing channel
     const app = initializeApp(firebaseConfig);
     const db  = getDatabase(app);
+    const nowRef = ref(db, `channels/${channelId}`);        // ← listen on channels/<id>
 
     const el = {
       title: document.getElementById('title'),
@@ -236,6 +234,8 @@
       artBG: document.getElementById('artBGsimple'),
       state: document.getElementById('state'),
     };
+
+    const artCache = new Map();
 
     function safeText(n, fallback="") {
       return (n ?? "").toString().replace(/\s+/g,' ').trim() || fallback;
@@ -247,19 +247,55 @@
       el.artBG.style.backgroundImage = `url("${url}")`;
     }
 
-    // Listen for track updates (same RTDB path you used before)
-    onValue(ref(db, 'nowPlaying'), (snap)=>{
-      const v = snap.val() || {};
-      el.title.textContent  = safeText(v.title, 'TITLE');
-      el.artist.textContent = safeText(v.artist, 'ARTIST');
-      el.album.textContent  = safeText(v.album, 'ALBUM');
-      setArtwork(v.artwork || "");
-      el.state.className = v.state || 'paused';
-    });
+    // iTunes artwork fallback (kept from your version)
+    async function fetchArtwork({ title, artist, album }) {
+      const key = `${artist}|${album}|${title}`.toLowerCase();
+      if (artCache.has(key)) return artCache.get(key);
 
-    /* -------- Video control + Mode state machine -------- */
+      const tries = [];
+      if (album && artist) tries.push(`${artist} ${album}`);
+      if (title && artist) tries.push(`${artist} ${title}`);
+      if (title)           tries.push(title);
+      if (artist)          tries.push(artist);
+
+      for (const q of tries) {
+        try {
+          let url = `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=music&entity=album&limit=1`;
+          let r = await fetch(url);
+          if (r.ok) {
+            const j = await r.json();
+            if (j.resultCount > 0) {
+              let art = j.results[0].artworkUrl100?.replace(/100x100bb\.jpg/i,'320x320bb.jpg');
+              if (art) { artCache.set(key, art); return art; }
+            }
+          }
+          url = `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=music&entity=song&limit=1`;
+          r = await fetch(url);
+          if (r.ok) {
+            const j = await r.json();
+            if (j.resultCount > 0) {
+              let art = j.results[0].artworkUrl100?.replace(/100x100bb\.jpg/i,'320x320bb.jpg');
+              if (art) { artCache.set(key, art); return art; }
+            }
+          }
+        } catch(_) {}
+      }
+      return "";
+    }
+
+    function render(v={}){
+      el.title.textContent  = safeText(v.title,  "—");
+      el.artist.textContent = safeText(v.artist, "—");
+      el.album.textContent  = safeText(v.album,  "—");
+      el.state.textContent  = (v.state === "Paused") ? "⏸ Paused" : "";
+      fetchArtwork(v).then(setArtwork);
+    }
+
+    onValue(nowRef, snap => render(snap.val() || {}));
+
+    /* -------- Video control + 3-mode state machine -------- */
     const DEFAULT_VIDEO = 'bg.mp4';
-    const CLUE_VIDEO = 'clue.mp4';
+    const CLUE_VIDEO    = 'clue.mp4';
     const vid    = document.getElementById('bg');
     const vidSrc = document.getElementById('bgsrc');
 
@@ -280,7 +316,6 @@
       playVideo();
     }
 
-    // Keep video alive across TVs
     vid.addEventListener('ended', ()=>{ try{ vid.currentTime = 0; playVideo(); }catch(e){} });
     setInterval(()=>{ if (vid.paused || vid.readyState < 2) playVideo(); }, 8000);
 
@@ -295,7 +330,7 @@
       if (MODES[modeIndex] === 'mode-music') {
         swapVideo(DEFAULT_VIDEO);
       } else if (MODES[modeIndex] === 'mode-card') {
-        swapVideo(DEFAULT_VIDEO); // keep bg.mp4 while showing flashcard
+        swapVideo(DEFAULT_VIDEO); // bg.mp4 while showing flashcard
       } else {
         swapVideo(CLUE_VIDEO);    // clue mode
       }
@@ -309,10 +344,11 @@
     // Stealth button wiring
     (function(){
       const btn = document.getElementById('stealthToggle');
-      btn.addEventListener('click', nextMode);
-      btn.addEventListener('touchstart', (e)=>{ e.preventDefault(); nextMode(); });
+      const onTap = (e)=>{ if(e) e.preventDefault(); nextMode(); };
+      btn.addEventListener('click', onTap);
+      btn.addEventListener('touchstart', onTap);
       btn.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); nextMode(); }
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onTap(); }
       });
       try { btn.focus({preventScroll:true}); } catch(_) {}
     })();
