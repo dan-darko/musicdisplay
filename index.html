@@ -9,13 +9,6 @@
 <link rel="preload" as="video" href="clue.mp4" />
 <link rel="preload" as="image" href="flashcard.png" />
 
-<script>
-  const qp = new URL(location.href).searchParams;
-  const forceLite = qp.get('mode') === 'lite';
-  const supportsGlass = CSS.supports('backdrop-filter','blur(2px)');
-  if (forceLite || !supportsGlass) document.documentElement.classList.add('no-glass');
-</script>
-
 <style>
   :root{
     --text-light:#fff; --text-dark:#111;
@@ -32,13 +25,14 @@
     position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;filter:brightness(.9) contrast(1.02);
   }
 
-  /* Subtle artwork tint (hidden in non-music modes) */
+  /* Subtle iTunes-artwork tint (hidden in non-music modes) */
   .artBGsimple{
     position:fixed;inset:0;z-index:1;pointer-events:none;opacity:var(--art-opacity);
     background-position:center;background-size:cover;background-repeat:no-repeat;
     transition:opacity 300ms ease;
   }
 
+  /* Scrim & stage (UI layer shown only in Music mode) */
   .scrim{
     position:fixed;inset:0;z-index:2;pointer-events:none;
     background:radial-gradient(ellipse at center,rgba(0,0,0,.12) 0%,rgba(0,0,0,.55) 70%);
@@ -51,6 +45,7 @@
     transition:opacity 300ms ease;
   }
 
+  /* Logo */
   .logoWrap{
     display:grid;place-items:center;margin-top:min(2vmin,12px);
     height:36vmin;width:36vmin;max-width:320px;max-height:320px;min-width:144px;min-height:144px;overflow:visible;
@@ -118,11 +113,11 @@
   .stealthHotspot{
     position:fixed;left:2.2vmin;bottom:2.2vmin;z-index:5;width:9vmin;height:9vmin;min-width:40px;min-height:40px;
     background:transparent;border:none;outline:none;border-radius:999px;
-    opacity:0; /* invisible to guests */
+    opacity:0; /* keep invisible to guests */
   }
   .stealthHotspot:focus{outline:2px dashed rgba(255,255,255,.25);outline-offset:4px}
 
-  /* FLASHCARD overlay (Card mode) */
+  /* FLASHCARD overlay (only in Card mode) */
   .flashcard{
     position:fixed;inset:0;z-index:3;display:grid;place-items:center;pointer-events:none;
     opacity:0;transition:opacity 300ms ease;
@@ -132,7 +127,11 @@
     filter:drop-shadow(0 30px 80px rgba(0,0,0,.6));
   }
 
-  /* MODE STATES */
+  /* MODE STATES
+     - mode-music: full UI
+     - mode-card : bg.mp4 + centered flashcard
+     - mode-clue : clue.mp4 only
+  */
   body.mode-music { --art-opacity: .28; }
   body.mode-card  { --art-opacity: 0; }
   body.mode-clue  { --art-opacity: 0; }
@@ -145,6 +144,7 @@
   body.mode-clue .scrim{
     opacity:0; pointer-events:none;
   }
+
   body.mode-card .flashcard{ opacity:1; }
 
   /* No-glass fallback */
@@ -206,7 +206,13 @@
   <button id="stealthToggle" class="stealthHotspot" title="Next screen" tabindex="0" aria-label="Next screen"></button>
 
   <script type="module">
-    /* -------- Firebase (RESTORED: your config + channel path) -------- */
+    /* -------- Feature flags / fallbacks (unchanged visuals) -------- */
+    const qp = new URL(location.href).searchParams;
+    const forceLite = qp.get('mode') === 'lite';
+    const supportsGlass = CSS.supports('backdrop-filter','blur(2px)');
+    if (forceLite || !supportsGlass) document.documentElement.classList.add('no-glass');
+
+    /* -------- Firebase (your CHANNEL listener; working wiring) -------- */
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
     import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
 
@@ -221,10 +227,10 @@
       measurementId: "G-M0J8PEZLJR"
     };
 
-    const channelId = "nowplaying-6f3a2b97";                // ← your existing channel
+    const channelId = "nowplaying-6f3a2b97";  // your existing channel
     const app = initializeApp(firebaseConfig);
     const db  = getDatabase(app);
-    const nowRef = ref(db, `channels/${channelId}`);        // ← listen on channels/<id>
+    const nowRef = ref(db, `channels/${channelId}`);
 
     const el = {
       title: document.getElementById('title'),
@@ -236,10 +242,7 @@
     };
 
     const artCache = new Map();
-
-    function safeText(n, fallback="") {
-      return (n ?? "").toString().replace(/\s+/g,' ').trim() || fallback;
-    }
+    const safeText = (n,f="") => (n ?? "").toString().replace(/\s+/g,' ').trim() || f;
 
     function setArtwork(url){
       if(!url){ el.art.removeAttribute('src'); el.artBG.style.backgroundImage='none'; return; }
@@ -247,7 +250,7 @@
       el.artBG.style.backgroundImage = `url("${url}")`;
     }
 
-    // iTunes artwork fallback (kept from your version)
+    // iTunes fallback, retained from your earlier workflow
     async function fetchArtwork({ title, artist, album }) {
       const key = `${artist}|${album}|${title}`.toLowerCase();
       if (artCache.has(key)) return artCache.get(key);
@@ -293,9 +296,9 @@
 
     onValue(nowRef, snap => render(snap.val() || {}));
 
-    /* -------- Video control + 3-mode state machine -------- */
+    /* -------- Video control + Mode state machine (3 scenes) -------- */
     const DEFAULT_VIDEO = 'bg.mp4';
-    const CLUE_VIDEO    = 'clue.mp4';
+    const CLUE_VIDEO = 'clue.mp4';
     const vid    = document.getElementById('bg');
     const vidSrc = document.getElementById('bgsrc');
 
@@ -316,6 +319,7 @@
       playVideo();
     }
 
+    // Keep video alive across TVs
     vid.addEventListener('ended', ()=>{ try{ vid.currentTime = 0; playVideo(); }catch(e){} });
     setInterval(()=>{ if (vid.paused || vid.readyState < 2) playVideo(); }, 8000);
 
@@ -330,7 +334,7 @@
       if (MODES[modeIndex] === 'mode-music') {
         swapVideo(DEFAULT_VIDEO);
       } else if (MODES[modeIndex] === 'mode-card') {
-        swapVideo(DEFAULT_VIDEO); // bg.mp4 while showing flashcard
+        swapVideo(DEFAULT_VIDEO); // keep bg.mp4 while showing flashcard
       } else {
         swapVideo(CLUE_VIDEO);    // clue mode
       }
@@ -341,7 +345,7 @@
       applyMode();
     }
 
-    // Stealth button wiring
+    // Stealth button wiring (bottom-left, same spot every scene)
     (function(){
       const btn = document.getElementById('stealthToggle');
       const onTap = (e)=>{ if(e) e.preventDefault(); nextMode(); };
