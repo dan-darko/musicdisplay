@@ -5,47 +5,34 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Now Playing</title>
 
-<!-- Preload the clean-mode video so the swap feels instant -->
+<!-- Preload assets so state switches feel instant -->
 <link rel="preload" as="video" href="clue.mp4" />
-
-<script>
-  const qp = new URL(location.href).searchParams;
-  const forceLite = qp.get('mode') === 'lite';
-  const supportsGlass = CSS.supports('backdrop-filter','blur(2px)');
-  if (forceLite || !supportsGlass) document.documentElement.classList.add('no-glass');
-</script>
+<link rel="preload" as="image" href="flashcard.png" />
 
 <style>
   :root{
-    --title-band:#cc16c7; --artist-band:#ffffff;
-    --text-dark:#111; --text-light:#fff;
-    --tilt-1:-9deg;
-    --tilt-2:-7deg;
-    --tilt-3:10deg;
-    --safe-pad:min(4vmin,32px);
-    /* centralised artwork overlay opacity so clean-mode can force 0 */
-    --art-opacity: 0.10; /* adjust default tint strength here (0.00–0.40) */
+    --text-light:#fff; --text-dark:#111;
+    --safe-pad: clamp(8px, 2vmin, 22px);
+    --tilt-1: -1.6deg; --tilt-2: -4.2deg; --tilt-3: 3deg;
+    --art-opacity: .28;
   }
-  html,body{
-    height:100%;margin:0;background:#000;color:#fff;
-    font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif;overflow:hidden
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:#000;color:#fff;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Inter,Helvetica,Arial,sans-serif}
+  body{overflow:hidden}
+
+  /* Background video */
+  .bg{
+    position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;filter:brightness(.9) contrast(1.02);
   }
 
-  /* Background video (always remains visible) */
-  video.bg{
-    position:fixed;inset:0;width:100%;height:100%;
-    object-fit:cover;z-index:0;background:#000
-  }
-
-  /* Simple artwork background overlay (fades out in clean mode) */
+  /* Subtle iTunes-artwork tint (hidden in non-music modes) */
   .artBGsimple{
-    position:fixed; inset:0; z-index:1; pointer-events:none;
-    background-position:center; background-size:cover; background-repeat:no-repeat;
-    opacity: var(--art-opacity);
+    position:fixed;inset:0;z-index:1;pointer-events:none;opacity:var(--art-opacity);
+    background-position:center;background-size:cover;background-repeat:no-repeat;
     transition:opacity 300ms ease;
   }
 
-  /* Scrim & stage (fade in clean mode) */
+  /* Scrim & stage (UI layer shown only in Music mode) */
   .scrim{
     position:fixed;inset:0;z-index:2;pointer-events:none;
     background:radial-gradient(ellipse at center,rgba(0,0,0,.12) 0%,rgba(0,0,0,.55) 70%);
@@ -54,7 +41,7 @@
   .stage{
     position:relative;z-index:3;height:100%;width:100%;
     display:flex;flex-direction:column;align-items:center;
-    padding:var(--safe-pad);box-sizing:border-box;gap:min(4vmin,28px);
+    padding:var(--safe-pad);gap:min(4vmin,28px);
     transition:opacity 300ms ease;
   }
 
@@ -74,10 +61,10 @@
   .band::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;mix-blend-mode:screen;
     opacity:.55;background:linear-gradient(180deg,rgba(255,255,255,.22),rgba(255,255,255,.05))}
   .band::after{content:"";position:absolute;top:0;left:5%;right:5%;height:40%;border-radius:inherit;filter:blur(12px);
-    opacity:.25;background:linear-gradient(180deg,rgba(255,255,255,.7),rgba(255,255,255,0));pointer-events:none}
+    background:linear-gradient(180deg,rgba(255,255,255,.5),transparent);opacity:.15}
 
   .titleBand{
-    transform:rotate(var(--tilt-1));width:min(92vw,1600px);margin-top:min(2vmin,24px);
+    transform:rotate(var(--tilt-1));width:min(68vw,1040px);
     background:linear-gradient(180deg,rgba(215,42,210,.85),rgba(168,20,163,.82));
     backdrop-filter:saturate(1.25) blur(8px);z-index:1
   }
@@ -87,7 +74,8 @@
   }
   .albumName{
     margin-top:clamp(6px,1.2vmin,12px);font-size:clamp(14px,3vmin,34px);font-weight:800;letter-spacing:.06em;
-    color:rgba(255,255,255,.95);text-transform:uppercase;text-align:center;max-width:92%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+    color:rgba(255,255,255,.95);text-transform:uppercase;text-align:center;
+    max-width:92%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap
   }
 
   .artCard{
@@ -110,76 +98,91 @@
     text-align:center;max-width:92%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap
   }
 
-  .paused{margin-top:min(2vmin,16px);font-size:clamp(14px,3.6vmin,28px);opacity:.9}
-
-  .no-glass .titleBand,.no-glass .artistBand{backdrop-filter:none!important}
-  .no-glass .band::before,.no-glass .band::after{display:none!important}
-  .no-glass .titleBand{background:#b613b1!important}
-  .no-glass .artistBand{background:#ffffff!important}
-  .no-glass .band{box-shadow:0 10px 24px rgba(0,0,0,.35)!important}
-
-  /* Ticker (black bg, pink text) */
+  /* Ticker */
   .ticker-wrap{
-    position: fixed;left: 0; right: 0; bottom: 0;height: 40px;background: #000;
-    z-index: 99;overflow: hidden;transition:opacity 300ms ease
+    position:fixed;left:0;right:0;bottom:0;height:8vmin;min-height:36px;z-index:4;
+    display:flex;align-items:center;overflow:hidden;transition:opacity 300ms ease;
   }
   .ticker{
-    position: absolute;white-space: nowrap;will-change: transform;display: inline-block;padding-left: 100%;
-    animation: tickerSlide 130s linear infinite
+    white-space:nowrap;display:inline-block;animation:marq 40s linear infinite;padding-left:100%;
+    font-weight:800;letter-spacing:.06em;font-size:clamp(12px,2.4vmin,20px);text-transform:uppercase
   }
-  .ticker span{display: inline-block;padding: 0 2rem;line-height: 40px;font-size: 18px;color: #ff4de3}
-  @keyframes tickerSlide{from {transform: translateX(0);} to {transform: translateX(-100%);}}
+  @keyframes marq{0%{transform:translateX(0)}100%{transform:translateX(-100%)}}
 
-  /* Invisible toggle hotspot
-     - tabindex makes it focusable for TV remotes
-     - tiny alpha makes some TV browsers treat it as hit-testable
-   */
+  /* Bottom-left stealth hotspot */
   .stealthHotspot{
-    position: fixed;left: 12px;bottom: 12px;width: 240px;height: 160px;
-    background: rgba(0,0,0,0.001);
-    border:0;z-index:10000;outline:none;cursor: pointer;
+    position:fixed;left:2.2vmin;bottom:2.2vmin;z-index:5;width:9vmin;height:9vmin;min-width:40px;min-height:40px;
+    background:transparent;border:none;outline:none;border-radius:999px;
+    opacity:0; /* keep invisible to guests */
   }
-  .stealthHotspot:focus-visible::after{
-    content:"";position:absolute;left:8px;bottom:8px;width:10px;height:10px;border-radius:50%;
-    background:#ff4de3;opacity:0;
+  .stealthHotspot:focus{outline:2px dashed rgba(255,255,255,.25);outline-offset:4px}
+
+  /* FLASHCARD overlay (only in Card mode) */
+  .flashcard{
+    position:fixed;inset:0;z-index:3;display:grid;place-items:center;pointer-events:none;
+    opacity:0;transition:opacity 300ms ease;
+  }
+  .flashcard img{
+    max-width:min(86vw,1400px);max-height:min(86vh,1400px);width:auto;height:auto;
+    filter:drop-shadow(0 30px 80px rgba(0,0,0,.6));
   }
 
-  /* CLEAN MODE: hide everything except video AND force overlay opacity to 0 */
-  body.clean { --art-opacity: 0; }
-  body.clean .stage,
-  body.clean .ticker-wrap,
-  body.clean .scrim{
-    opacity:0;
-    pointer-events:none;
+  /* MODE STATES
+     - mode-music: full UI
+     - mode-card : bg.mp4 + centered flashcard
+     - mode-clue : clue.mp4 only
+  */
+  body.mode-music { --art-opacity: .28; }
+  body.mode-card  { --art-opacity: 0; }
+  body.mode-clue  { --art-opacity: 0; }
+
+  body.mode-card .stage,
+  body.mode-card .ticker-wrap,
+  body.mode-card .scrim,
+  body.mode-clue .stage,
+  body.mode-clue .ticker-wrap,
+  body.mode-clue .scrim{
+    opacity:0; pointer-events:none;
   }
+
+  body.mode-card .flashcard{ opacity:1; }
+
+  /* No-glass fallback */
+  .no-glass .titleBand,.no-glass .artistBand{backdrop-filter:none}
 </style>
 </head>
-<body>
-  <!-- Background/Clean video -->
+<body class="mode-music">
+  <!-- Background video -->
   <video id="bg" class="bg" autoplay muted loop playsinline webkit-playsinline preload="auto">
     <source id="bgsrc" src="bg.mp4" type="video/mp4" />
   </video>
 
-  <!-- Subtle artwork tint (will fade out in clean mode) -->
+  <!-- Artwork tint -->
   <div id="artBGsimple" class="artBGsimple"></div>
 
   <div class="scrim"></div>
 
+  <!-- FLASHCARD (rules/info) -->
+  <div class="flashcard" aria-hidden="true">
+    <img src="flashcard.png" alt="" />
+  </div>
+
+  <!-- Main UI -->
   <div class="stage">
     <div class="logoWrap">
-      <img id="logoImg" src="logo.png" alt="Event logo">
+      <img src="logo.png" alt="Event Logo" loading="eager" />
     </div>
 
     <div class="titleRow">
       <div class="band titleBand" id="titleBand">
         <div class="inner">
-          <span id="title" class="songTitle">SONG TITLE</span>
-          <span id="album" class="albumName">ALBUM NAME</span>
+          <div id="title" class="songTitle">TITLE</div>
+          <div id="album" class="albumName">ALBUM</div>
         </div>
       </div>
 
-      <div class="artCard" id="artCard">
-        <img id="artImg" src="fallback.jpg" alt="Album art">
+      <div class="artCard" id="artCard" aria-hidden="true">
+        <img id="artwork" src="" alt="" />
       </div>
     </div>
 
@@ -195,14 +198,21 @@
   <!-- Ticker -->
   <div class="ticker-wrap">
     <div class="ticker">
-      <span>Welcome to The Mayplace Curse! • GAME RULES: When the countdown begins you will have 1 hour and 30 minutes to solve the mystery. The countdown can start at any time without warning. IMPORTANT!: Please stick together as a group at all times - no splitting up! Please no random searching - be fairly certain of a clue's location before opening cupboards / drawers etc and work together as a team. Upstairs is off limits and not included in the experience. Happy Halloweeeeeeeen!!!!! </span>
+      <span>Welcome to The Mayplace Curse! • GAME RULES: When the TV timer begins, you have one hour to return the cursed doll. Work as a team, be respectful of the house, only open what seems relevant to a clue, and put things back nicely. Please don’t move heavy furniture or force anything. Have fun & good luck! •</span>
     </div>
   </div>
 
   <!-- Invisible bottom-left hotspot -->
-  <button id="stealthToggle" class="stealthHotspot" title="Toggle UI" tabindex="0" aria-label="Toggle UI"></button>
+  <button id="stealthToggle" class="stealthHotspot" title="Next screen" tabindex="0" aria-label="Next screen"></button>
 
   <script type="module">
+    /* -------- Feature flags / fallbacks -------- */
+    const qp = new URL(location.href).searchParams;
+    const forceLite = qp.get('mode') === 'lite';
+    const supportsGlass = CSS.supports('backdrop-filter','blur(2px)');
+    if (forceLite || !supportsGlass) document.documentElement.classList.add('no-glass');
+
+    /* -------- Firebase (track info) -------- */
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
     import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
 
@@ -212,77 +222,45 @@
       databaseURL: "https://music-display-1d354-default-rtdb.firebaseio.com",
       projectId: "music-display-1d354",
       storageBucket: "music-display-1d354.appspot.com",
-      messagingSenderId: "441980322694",
-      appId: "1:441980322694:web:32cfbcc182773b5bc1a207",
-      measurementId: "G-M0J8PEZLJR"
+      messagingSenderId: "555717940924",
+      appId: "1:555717940924:web:7d5f9d3c8f7d6f9f8b3d2f"
     };
-
-    const channelId = "nowplaying-6f3a2b97";
     const app = initializeApp(firebaseConfig);
     const db  = getDatabase(app);
-    const nowRef = ref(db, `channels/${channelId}`);
 
-    const artCache = new Map();
+    const el = {
+      title: document.getElementById('title'),
+      artist: document.getElementById('artist'),
+      album: document.getElementById('album'),
+      art: document.getElementById('artwork'),
+      artBG: document.getElementById('artBGsimple'),
+      state: document.getElementById('state'),
+    };
 
-    async function fetchArtwork({ title, artist, album }) {
-      const key = `${artist}|${album}|${title}`.toLowerCase();
-      if (artCache.has(key)) return artCache.get(key);
-      const tries = [];
-      if (album && artist) tries.push(`${artist} ${album}`);
-      if (title && artist) tries.push(`${artist} ${title}`);
-      if (title)           tries.push(title);
-      if (artist)          tries.push(artist);
-      for (const q of tries) {
-        try {
-          let url = `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=music&entity=album&limit=1`;
-          let r = await fetch(url);
-          if (r.ok) {
-            const j = await r.json();
-            if (j.resultCount > 0) {
-              let art = j.results[0].artworkUrl100?.replace(/100x100bb\.jpg/i,'320x320bb.jpg');
-              if (art) { artCache.set(key, art); return art; }
-            }
-          }
-          url = `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=music&entity=song&limit=1`;
-          r = await fetch(url);
-          if (r.ok) {
-            const j = await r.json();
-            if (j.resultCount > 0) {
-              let art = j.results[0].artworkUrl100?.replace(/100x100bb\.jpg/i,'320x320bb.jpg');
-              if (art) { artCache.set(key, art); return art; }
-            }
-          }
-        } catch(_) {}
-      }
-      artCache.set(key, null);
-      return null;
+    function safeText(n, fallback="") {
+      return (n ?? "").toString().replace(/\s+/g,' ').trim() || fallback;
     }
 
-    function setArtwork(src){
-      const img = document.getElementById("artImg");
-      const bg  = document.getElementById("artBGsimple");
-      img.src = src || "fallback.jpg";
-      if (src) {
-        bg.style.backgroundImage = `url("${src}")`;
-      } else {
-        bg.style.backgroundImage = "none";
-      }
+    function setArtwork(url){
+      if(!url){ el.art.removeAttribute('src'); el.artBG.style.backgroundImage='none'; return; }
+      el.art.src = url;
+      el.artBG.style.backgroundImage = `url("${url}")`;
     }
 
-    function render(v={}){
-      document.getElementById("title").textContent  = v.title  || "—";
-      document.getElementById("artist").textContent = v.artist || "—";
-      document.getElementById("album").textContent  = v.album  || "—";
-      document.getElementById("state").textContent  = v.state === "Paused" ? "⏸ Paused" : "";
-      fetchArtwork(v).then(setArtwork);
-    }
+    // Listen for track updates (same RTDB path you used before)
+    onValue(ref(db, 'nowPlaying'), (snap)=>{
+      const v = snap.val() || {};
+      el.title.textContent  = safeText(v.title, 'TITLE');
+      el.artist.textContent = safeText(v.artist, 'ARTIST');
+      el.album.textContent  = safeText(v.album, 'ALBUM');
+      setArtwork(v.artwork || "");
+      el.state.className = v.state || 'paused';
+    });
 
-    onValue(nowRef, snap => render(snap.val() || {}));
-
-    // ----- Video keep-alive & swapping -----
-    const DEFAULT_VIDEO = "bg.mp4";
-    const CLEAN_VIDEO   = "clue.mp4";
-    const vid = document.getElementById('bg');
+    /* -------- Video control + Mode state machine -------- */
+    const DEFAULT_VIDEO = 'bg.mp4';
+    const CLUE_VIDEO = 'clue.mp4';
+    const vid    = document.getElementById('bg');
     const vidSrc = document.getElementById('bgsrc');
 
     function playVideo() {
@@ -293,46 +271,54 @@
       } catch(_) {}
     }
 
-    function switchVideo(toClean) {
-      const target = toClean ? CLEAN_VIDEO : DEFAULT_VIDEO;
-      // Avoid unnecessary reload
+    function swapVideo(src){
       const current = vidSrc.getAttribute('src');
-      if (current === target) { playVideo(); return; }
-
-      // Swap source then load and play
-      vidSrc.setAttribute('src', target);
+      if (current === src) { playVideo(); return; }
+      vidSrc.setAttribute('src', src);
       try { vid.load(); } catch(_) {}
       vid.currentTime = 0;
       playVideo();
     }
 
-    // keep video alive
+    // Keep video alive across TVs
     vid.addEventListener('ended', ()=>{ try{ vid.currentTime = 0; playVideo(); }catch(e){} });
     setInterval(()=>{ if (vid.paused || vid.readyState < 2) playVideo(); }, 8000);
 
-    // Stealth toggle logic (bottom-left hotspot) + video swap
+    // Modes: music -> card -> clue -> music
+    const MODES = ['mode-music','mode-card','mode-clue'];
+    let modeIndex = 0;
+
+    function applyMode(){
+      document.body.classList.remove(...MODES);
+      document.body.classList.add(MODES[modeIndex]);
+
+      if (MODES[modeIndex] === 'mode-music') {
+        swapVideo(DEFAULT_VIDEO);
+      } else if (MODES[modeIndex] === 'mode-card') {
+        swapVideo(DEFAULT_VIDEO); // keep bg.mp4 while showing flashcard
+      } else {
+        swapVideo(CLUE_VIDEO);    // clue mode
+      }
+    }
+
+    function nextMode(){
+      modeIndex = (modeIndex + 1) % MODES.length;
+      applyMode();
+    }
+
+    // Stealth button wiring
     (function(){
       const btn = document.getElementById('stealthToggle');
-      if(!btn) return;
-
-      function toggleClean(){
-        const isClean = !document.body.classList.contains('clean');
-        document.body.classList.toggle('clean', isClean);
-        switchVideo(isClean); // swap to clue.mp4 in clean mode, back to bg.mp4 otherwise
-      }
-
-      // Click / tap
-      btn.addEventListener('click', toggleClean);
-      btn.addEventListener('touchstart', (e)=>{ e.preventDefault(); toggleClean(); });
-
-      // Remote OK/Enter when focused
+      btn.addEventListener('click', nextMode);
+      btn.addEventListener('touchstart', (e)=>{ e.preventDefault(); nextMode(); });
       btn.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleClean(); }
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); nextMode(); }
       });
-
-      // Focus once on load (helps TVs receive OK/Enter)
       try { btn.focus({preventScroll:true}); } catch(_) {}
     })();
+
+    // Start in Music mode explicitly
+    applyMode();
   </script>
 </body>
 </html>
